@@ -1,16 +1,14 @@
 #!/usr/bin/env perl
 
-our $VERSION = '0.1.0';
-
 =pod
 
 =head1 NAME
 
-queuemod - Modify messages in a queue.
+dlq-tool.pl - A simple web tool to modify a DLQ
 
 =head1 SYNOPSIS
 
-queuemod [options]
+dlq-tool.pl [options]
 
   Options:
     -h --help           display this help message
@@ -68,15 +66,86 @@ perform any action this will write the message.
 
 =back
 
+=head1 DEPENDENCIES
+
+=over 4
+
+=item Net::AMQP::RabbitMQ
+
+Obviously, we need some sort of module to connect to RabbitMQ.
+
+=item Readonly
+
+You should have this installed already.
+
+=item Mojolicious::Lite
+
+This supports our web interface.
+
+=back
+
 =cut
 
 use strict;
 use warnings;
-use 5.20.0;
+use 5.020;
 
+use Readonly;
+
+use Net::AMQP::RabbitMQ;
 use Mojolicious::Lite;
 
+Readonly my $VERSION => '0.1.0';
+Readonly my $APP_NAME => 'DLQ Tool';
+Readonly my $SUB_CHANNEL => 1;
+Readonly my $PUB_CHANNEL => 2;
+
 =pod
+
+=head1 FUNCTIONS
+
+=over 4
+
+=item rmq_get_connection(%)
+
+This function connects to RabbitMQ.
+
+=back
+
+=cut
+
+sub rmq_get_connection {
+  my %opts = @_;
+  
+  my $hostname = delete $opts{host};
+  my $mq = Net::AMQP::RabbitMQ->new();
+  $mq->connect( $hostname, \%opts );
+  $mq->channel_open(1);
+  
+  return $mq;
+}
+
+=pod
+
+=item rmq_finish($)
+
+=cut
+
+sub rmq_finish {
+  my ($conn) = @_;
+
+  $conn->channel_close( 1 );
+  $conn->disconnect();
+
+  return;
+}
+
+
+=pod
+
+=head1 ENDPOINTS
+
+Below are the various endpoints for the web interface.
 
 =head2 GET /
 
@@ -86,7 +155,6 @@ This is the default landing page.
 
 get '/' => {template=>'index'};
 
-app->defaults(VERSION=>$VERSION);
 app->start;
 
 __DATA__
@@ -104,7 +172,7 @@ __DATA__
 </html>
 
 @@ index.html.ep
-% layout 'main', title => "QueueMod";
+% layout 'main', title => "DLQ Tool";
 
 <% my $field = begin %>
   % my %opts = @_;
@@ -113,7 +181,7 @@ __DATA__
   % my $default = delete $opts{default};
   % $default ||= '';
   %= label_for $name => $label
-  &nbsp;
+  :&nbsp;
   %= text_field $name => $default, id => "field.${name}"
   <br/><br/>
 <% end %>
@@ -123,10 +191,19 @@ __DATA__
 %= $field->(label=>'RMQ Host', name=>'host')
 %= $field->(label=>'RMQ Port', name=>'port', default=>'5672')
 %= $field->(label=>'RMQ Vhost', name=>'vhost', default=>'/')
-%= $field->(label=>'Read Queue', name=>'readQueue')
-%= $field->(label=>'Re-publish Exchange', name=>'republishExchange')
 %= submit_button
 % end
+
+@@ find-form.html.ep
+
+
+%= $field->(label=>'Read Queue', name=>'readQueue')
+%= $field->(label=>'Re-publish Exchange', name=>'republishExchange')
+
+<fieldset>
+%= $field->(label=>' Regex', name=>'lookupRegex')
+</fieldset>
+
 
 __END__
 
@@ -215,21 +292,6 @@ sub parse_args {
   }
   
   return $opts;
-}
-
-sub rmq_get_connection {
-  my ($opts) = @_;
-  
-  my $mq = Net::AMQP::RabbitMQ->new();
-  $mq->connect( $opts->{host}, $opts );
-  $mq->channel_open(1);
-  
-  return $mq;
-}
-
-sub rmq_finish {
-  $_[0]->channel_close( 1 );
-  $_[0]->disconnect();
 }
 
 sub write_file {
